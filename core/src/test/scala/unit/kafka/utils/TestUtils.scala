@@ -66,6 +66,7 @@ object TestUtils extends Logging {
     val socketList = sockets.toList
     val ports = socketList.map(_.getLocalPort)
     socketList.map(_.close)
+    printlin("scala.choosePorts:", ports)
     ports
   }
 

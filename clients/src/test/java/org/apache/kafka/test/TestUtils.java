@@ -24,6 +24,7 @@ import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import static java.lang.System.out;
 
 import org.apache.kafka.common.Cluster;
 import org.apache.kafka.common.Node;
@@ -72,7 +73,7 @@ public class TestUtils {
             }
             for (int i = 0; i < count; i++)
                 sockets[i].close();
-            println("scala.choosePorts:", ports);
+            out.println("scala.choosePorts:", ports);
             return ports;
         } catch (IOException e) {
             throw new RuntimeException(e);

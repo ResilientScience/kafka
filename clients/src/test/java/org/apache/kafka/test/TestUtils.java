@@ -72,7 +72,7 @@ public class TestUtils {
             }
             for (int i = 0; i < count; i++)
                 sockets[i].close();
-            println("scala.choosePorts:", ports)
+            println("scala.choosePorts:", ports);
             return ports;
         } catch (IOException e) {
             throw new RuntimeException(e);

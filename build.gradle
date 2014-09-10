@@ -270,6 +270,7 @@ project(':core') {
   test {
     testLogging {
         events "passed", "skipped", "failed"
+        showStandardStreams = true
         exceptionFormat = 'full'
     }
   }
@@ -369,6 +370,7 @@ project(':clients') {
     testLogging {
         events "passed", "skipped", "failed"
         exceptionFormat = 'full'
+        showStandardStreams = true
     }
   }
 }

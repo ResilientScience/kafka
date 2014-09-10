@@ -256,8 +256,9 @@ project(':core') {
 
   test {
     testLogging {
-        events "passed", "skipped", "failed"
+        events "started", "passed", "skipped", "failed", "standardOut", "standardError"
         exceptionFormat = 'full'
+        showStandardStreams = true
     }
   }
 
@@ -359,8 +360,9 @@ project(':clients') {
 
   test {
     testLogging {
-        events "passed", "skipped", "failed"
+        events "started", "passed", "skipped", "failed", "standardOut", "standardError"
         exceptionFormat = 'full'
+        showStandardStreams = true
     }
   }
 }

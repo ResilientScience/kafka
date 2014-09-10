@@ -23,7 +23,7 @@ import kafka.utils.{ZKStringSerializer, TestZKUtils, Utils}
 import java.net.BindException
 
 trait ZooKeeperTestHarness extends JUnit3Suite {
-  val zkConnect: String = TestZKUtils.zookeeperConnect
+  var zkConnect: String = TestZKUtils.zookeeperConnect
   var zookeeper: EmbeddedZookeeper = null
   var zkClient: ZkClient = null
   val zkConnectionTimeout = 6000

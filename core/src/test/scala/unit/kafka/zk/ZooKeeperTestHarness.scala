@@ -20,6 +20,7 @@ package kafka.zk
 import org.scalatest.junit.JUnit3Suite
 import org.I0Itec.zkclient.ZkClient
 import kafka.utils.{ZKStringSerializer, TestZKUtils, Utils}
+import java.net.BindException
 
 trait ZooKeeperTestHarness extends JUnit3Suite {
   val zkConnect: String = TestZKUtils.zookeeperConnect
@@ -30,7 +31,15 @@ trait ZooKeeperTestHarness extends JUnit3Suite {
 
   override def setUp() {
     super.setUp
-    zookeeper = new EmbeddedZookeeper(zkConnect)
+    try {
+      zookeeper = new EmbeddedZookeeper(zkConnect)
+    } catch {
+      case e: BindException => {
+        println("TEST ERROR: Unable to bind to expected port. Address already in use")
+        zkConnect = TestZKUtils.zookeeperConnect
+        zookeeper = new EmbeddedZookeeper(zkConnect)
+      }
+    }        
     zkClient = new ZkClient(zookeeper.connectString, zkSessionTimeout, zkConnectionTimeout, ZKStringSerializer)
   }
 

@@ -93,6 +93,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime) extends Logg
                                     config.socketReceiveBufferBytes,
                                     config.socketRequestMaxBytes,
                                     config.maxConnectionsPerIp)
+    println("KafkaServer.scala socketServer.startup about to start on port", config.port)
     socketServer.startup()
 
     replicaManager = new ReplicaManager(config, time, zkClient, kafkaScheduler, logManager, isShuttingDown)

@@ -124,6 +124,8 @@ public class ConfigDef {
                 throw new ConfigException("Missing required configuration \"" + key.name + "\" which has no default value.");
             else
                 value = key.defaultValue;
+            if (key.validator != null)
+                key.validator.ensureValid(key.name, value);
             values.put(key.name, value);
         }
         return values;
@@ -267,6 +269,48 @@ public class ConfigDef {
                 return "[" + min + ",...," + max + "]";
         }
     }
+
+  public static class ValidString implements Validator {
+    List<String> validStrings;
+
+    private ValidString(List<String> validStrings) {
+      this.validStrings = validStrings;
+    }
+
+    public static ValidString in(List<String> validStrings) {
+      return new ValidString(validStrings);
+    }
+
+    @Override
+    public void ensureValid(String name, Object o) {
+
+      String s = (String) o;
+
+      if (!validStrings.contains(s)) {
+        throw new ConfigException(name,o,"String must be one of:" +join(validStrings));
+      }
+
+    }
+
+    public String toString() {
+      return "[" + join(validStrings) + "]";
+    }
+
+    private String join(List<String> list)
+    {
+      StringBuilder sb = new StringBuilder();
+      boolean first = true;
+      for (String item : list)
+      {
+        if (first)
+          first = false;
+        else
+          sb.append(",");
+        sb.append(item);
+      }
+      return sb.toString();
+    }
+  }
 
     private static class ConfigKey {
         public final String name;

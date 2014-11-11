@@ -345,12 +345,13 @@ class KafkaController(val config : KafkaConfig, zkClient: ZkClient, val brokerSt
     if (deleteTopicManager != null)
       deleteTopicManager.shutdown()
 
+    // shutdown leader rebalance scheduler
+    if (config.autoLeaderRebalanceEnable)
+      autoRebalanceScheduler.shutdown()
+
     inLock(controllerContext.controllerLock) {
       // de-register partition ISR listener for on-going partition reassignment task
       deregisterReassignedPartitionsIsrChangeListeners()
-      // shutdown leader rebalance scheduler
-      if (config.autoLeaderRebalanceEnable)
-        autoRebalanceScheduler.shutdown()
       // shutdown partition state machine
       partitionStateMachine.shutdown()
       // shutdown replica state machine
@@ -1300,8 +1301,7 @@ class PreferredReplicaElectionListener(controller: KafkaController) extends IZkD
         error("Skipping preferred replica election for partitions %s since the respective topics are being deleted"
           .format(partitionsForTopicsToBeDeleted))
       }
-      else
-        controller.onPreferredReplicaElection(partitions -- partitionsForTopicsToBeDeleted)
+      controller.onPreferredReplicaElection(partitions -- partitionsForTopicsToBeDeleted)
     }
   }
 

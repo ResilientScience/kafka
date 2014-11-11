@@ -19,7 +19,7 @@ package kafka.admin
 
 import joptsimple._
 import java.util.Properties
-import kafka.admin.AdminOperationException
+import kafka.common.AdminCommandFailedException
 import kafka.utils._
 import org.I0Itec.zkclient.ZkClient
 import org.I0Itec.zkclient.exception.ZkNodeExistsException
@@ -29,6 +29,7 @@ import kafka.cluster.Broker
 import kafka.log.LogConfig
 import kafka.consumer.Whitelist
 import kafka.server.OffsetManager
+import org.apache.kafka.common.utils.Utils.formatAddress
 
 
 object TopicCommand {
@@ -96,6 +97,9 @@ object TopicCommand {
 
   def alterTopic(zkClient: ZkClient, opts: TopicCommandOptions) {
     val topics = getTopics(zkClient, opts)
+    if (topics.length == 0) {
+      println("Topic %s does not exist".format(opts.options.valueOf(opts.topicOpt)))
+    }
     topics.foreach { topic =>
       val configs = AdminUtils.fetchTopicConfig(zkClient, topic)
       if(opts.options.has(opts.configOpt) || opts.options.has(opts.deleteConfigOpt)) {
@@ -193,7 +197,7 @@ object TopicCommand {
     }
   }
   
-  def formatBroker(broker: Broker) = broker.id + " (" + broker.host + ":" + broker.port + ")"
+  def formatBroker(broker: Broker) = broker.id + " (" + formatAddress(broker.host, broker.port) + ")"
   
   def parseTopicConfigsToBeAdded(opts: TopicCommandOptions): Properties = {
     val configsToBeAdded = opts.options.valuesOf(opts.configOpt).map(_.split("""\s*=\s*"""))
@@ -222,6 +226,9 @@ object TopicCommand {
     val ret = new mutable.HashMap[Int, List[Int]]()
     for (i <- 0 until partitionList.size) {
       val brokerList = partitionList(i).split(":").map(s => s.trim().toInt)
+      val duplicateBrokers = Utils.duplicates(brokerList)
+      if (duplicateBrokers.nonEmpty)
+        throw new AdminCommandFailedException("Partition replica lists may not contain duplicate entries: %s".format(duplicateBrokers.mkString(",")))
       ret.put(i, brokerList.toList)
       if (ret(i).size != ret(0).size)
         throw new AdminOperationException("Partition " + i + " has different replication factor: " + brokerList)

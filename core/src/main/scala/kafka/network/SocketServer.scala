@@ -17,6 +17,7 @@
 
 package kafka.network
 
+import java.util
 import java.util.concurrent._
 import java.util.concurrent.atomic._
 import java.net._
@@ -28,7 +29,7 @@ import scala.collection._
 import kafka.common.KafkaException
 import kafka.metrics.KafkaMetricsGroup
 import kafka.utils._
-import com.yammer.metrics.core.Meter
+import com.yammer.metrics.core.{Gauge, Meter}
 
 /**
  * An NIO socket server. The threading model is
@@ -45,6 +46,7 @@ class SocketServer(val brokerId: Int,
                    val recvBufferSize: Int,
                    val maxRequestSize: Int = Int.MaxValue,
                    val maxConnectionsPerIp: Int = Int.MaxValue,
+                   val connectionsMaxIdleMs: Long,
                    val maxConnectionsPerIpOverrides: Map[String, Int] = Map[String, Int]()) extends Logging with KafkaMetricsGroup {
   this.logIdent = "[Socket Server on Broker " + brokerId + "], "
   private val time = SystemTime
@@ -68,9 +70,15 @@ class SocketServer(val brokerId: Int,
                                     newMeter("NetworkProcessor-" + i + "-IdlePercent", "percent", TimeUnit.NANOSECONDS),
                                     numProcessorThreads, 
                                     requestChannel,
-                                    quotas)
+                                    quotas,
+                                    connectionsMaxIdleMs)
       Utils.newThread("kafka-network-thread-%d-%d".format(port, i), processors(i), false).start()
     }
+
+    newGauge("ResponsesBeingSent", new Gauge[Int] {
+      def value = processors.foldLeft(0) { (total, p) => total + p.countInterestOps(SelectionKey.OP_WRITE) }
+    })
+
     // register the processor threads for notification of responses
     requestChannel.addResponseListener((id:Int) => processors(id).wakeup())
    
@@ -164,13 +172,25 @@ private[kafka] abstract class AbstractServerThread(connectionQuotas: ConnectionQ
    * Close all open connections
    */
   def closeAll() {
+    // removes cancelled keys from selector.keys set
+    this.selector.selectNow() 
     val iter = this.selector.keys().iterator()
     while (iter.hasNext) {
       val key = iter.next()
       close(key)
     }
   }
-  
+
+  def countInterestOps(ops: Int): Int = {
+    var count = 0
+    val it = this.selector.keys().iterator()
+    while (it.hasNext) {
+      if ((it.next().interestOps() & ops) != 0) {
+        count += 1
+      }
+    }
+    count
+  }
 }
 
 /**
@@ -280,9 +300,14 @@ private[kafka] class Processor(val id: Int,
                                val idleMeter: Meter,
                                val totalProcessorThreads: Int,
                                val requestChannel: RequestChannel,
-                               connectionQuotas: ConnectionQuotas) extends AbstractServerThread(connectionQuotas) {
-  
+                               connectionQuotas: ConnectionQuotas,
+                               val connectionsMaxIdleMs: Long) extends AbstractServerThread(connectionQuotas) {
+
   private val newConnections = new ConcurrentLinkedQueue[SocketChannel]()
+  private val connectionsMaxIdleNanos = connectionsMaxIdleMs * 1000 * 1000
+  private var currentTimeNanos = SystemTime.nanoseconds
+  private val lruConnections = new util.LinkedHashMap[SelectionKey, Long]
+  private var nextIdleCloseCheckTime = currentTimeNanos + connectionsMaxIdleNanos
 
   override def run() {
     startupComplete()
@@ -293,7 +318,8 @@ private[kafka] class Processor(val id: Int,
       processNewResponses()
       val startSelectTime = SystemTime.nanoseconds
       val ready = selector.select(300)
-      val idleTime = SystemTime.nanoseconds - startSelectTime
+      currentTimeNanos = SystemTime.nanoseconds
+      val idleTime = currentTimeNanos - startSelectTime
       idleMeter.mark(idleTime)
       // We use a single meter for aggregate idle percentage for the thread pool.
       // Since meter is calculated as total_recorded_value / time_window and
@@ -332,11 +358,20 @@ private[kafka] class Processor(val id: Int,
           }
         }
       }
+      maybeCloseOldestConnection
     }
     debug("Closing selector.")
-    swallowError(closeAll())
+    closeAll()
     swallowError(selector.close())
     shutdownComplete()
+  }
+
+  /**
+   * Close the given key and associated socket
+   */
+  override def close(key: SelectionKey): Unit = {
+    lruConnections.remove(key)
+    super.close(key)
   }
 
   private def processNewResponses() {
@@ -399,6 +434,7 @@ private[kafka] class Processor(val id: Int,
    * Process reads from ready sockets
    */
   def read(key: SelectionKey) {
+    lruConnections.put(key, currentTimeNanos)
     val socketChannel = channelFor(key)
     var receive = key.attachment.asInstanceOf[Receive]
     if(key.attachment == null) {
@@ -448,6 +484,24 @@ private[kafka] class Processor(val id: Int,
   }
 
   private def channelFor(key: SelectionKey) = key.channel().asInstanceOf[SocketChannel]
+
+  private def maybeCloseOldestConnection {
+    if(currentTimeNanos > nextIdleCloseCheckTime) {
+      if(lruConnections.isEmpty) {
+        nextIdleCloseCheckTime = currentTimeNanos + connectionsMaxIdleNanos
+      } else {
+        val oldestConnectionEntry = lruConnections.entrySet.iterator().next()
+        val connectionLastActiveTime = oldestConnectionEntry.getValue
+        nextIdleCloseCheckTime = connectionLastActiveTime + connectionsMaxIdleNanos
+        if(currentTimeNanos > nextIdleCloseCheckTime) {
+          val key: SelectionKey = oldestConnectionEntry.getKey
+          trace("About to close the idle connection from " + key.channel.asInstanceOf[SocketChannel].socket.getRemoteSocketAddress
+            + " due to being idle for " + (currentTimeNanos - connectionLastActiveTime) / 1000 / 1000 + " millis")
+          close(key)
+        }
+      }
+    }
+  }
 
 }
 

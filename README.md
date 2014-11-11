@@ -2,6 +2,14 @@ Apache Kafka
 =================
 See our [web site](http://kafka.apache.org) for details on the project.
 
+You need to have [gradle](http://www.gradle.org/installation) installed.
+
+### First bootstrap and download the wrapper ###
+    cd kafka_source_dir
+    gradle
+
+Now everything else will work
+
 ### Building a jar and running it ###
     ./gradlew jar  
 
@@ -42,13 +50,13 @@ The release file can be found inside ./core/build/distributions/.
     ./gradlew clean
 
 ### Running a task on a particular version of Scala (either 2.9.1, 2.9.2, 2.10.1 or 2.11) ###
-#### (If building a jar with a version other than 2.10, the scala version variable in bin/kafka-run-class.sh needs to be changed to run quick start.) ####
+#### (If building a jar with a version other than 2.10, need to set SCALA_BINARY_VERSION variable or change it in bin/kafka-run-class.sh to run quick start.) ####
     ./gradlew -PscalaVersion=2.9.1 jar
     ./gradlew -PscalaVersion=2.9.1 test
     ./gradlew -PscalaVersion=2.9.1 releaseTarGz
 
 ### Running a task for a specific project ###
-This is for 'core', 'perf', 'contrib:hadoop-consumer', 'contrib:hadoop-producer', 'examples' and 'clients'
+This is for 'core', 'contrib:hadoop-consumer', 'contrib:hadoop-producer', 'examples' and 'clients'
     ./gradlew core:jar
     ./gradlew core:test
 
@@ -88,7 +96,7 @@ Please note for this to work you should create/update `~/.gradle/gradle.properti
 
 ### Contribution ###
 
-Apache Kafka interested in building the community; we would welcome any thoughts or [patches](https://issues.apache.org/jira/browse/KAFKA). You can reach us [on the Apache mailing lists](http://kafka.apache.org/contact.html).
+Apache Kafka is interested in building the community; we would welcome any thoughts or [patches](https://issues.apache.org/jira/browse/KAFKA). You can reach us [on the Apache mailing lists](http://kafka.apache.org/contact.html).
 
 To contribute follow the instructions here:
  * http://kafka.apache.org/contributing.html

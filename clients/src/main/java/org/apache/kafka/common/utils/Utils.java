@@ -12,12 +12,19 @@
  */
 package org.apache.kafka.common.utils;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.apache.kafka.common.KafkaException;
 
 public class Utils {
+
+    private static final Pattern HOST_PORT_PATTERN = Pattern.compile("\\[?(.+?)\\]?:(\\d+)");
 
     public static String NL = System.getProperty("line.separator");
 
@@ -71,6 +78,34 @@ public class Utils {
     }
 
     /**
+     * Read an unsigned integer stored in little-endian format from the {@link InputStream}.
+     * 
+     * @param in The stream to read from
+     * @return The integer read (MUST BE TREATED WITH SPECIAL CARE TO AVOID SIGNEDNESS)
+     */
+    public static int readUnsignedIntLE(InputStream in) throws IOException {
+        return (in.read() << 8*0) 
+             | (in.read() << 8*1)
+             | (in.read() << 8*2)
+             | (in.read() << 8*3);
+    }
+
+    /**
+     * Read an unsigned integer stored in little-endian format from a byte array
+     * at a given offset.
+     * 
+     * @param buffer The byte array to read from
+     * @param offset The position in buffer to read from
+     * @return The integer read (MUST BE TREATED WITH SPECIAL CARE TO AVOID SIGNEDNESS)
+     */
+    public static int readUnsignedIntLE(byte[] buffer, int offset) {
+        return (buffer[offset++] << 8*0)
+             | (buffer[offset++] << 8*1)
+             | (buffer[offset++] << 8*2)
+             | (buffer[offset]   << 8*3);
+    }
+
+    /**
      * Write the given long value as a 4 byte unsigned integer. Overflow is ignored.
      * 
      * @param buffer The buffer to write to
@@ -90,6 +125,35 @@ public class Utils {
     public static void writeUnsignedInt(ByteBuffer buffer, int index, long value) {
         buffer.putInt(index, (int) (value & 0xffffffffL));
     }
+
+    /**
+     * Write an unsigned integer in little-endian format to the {@link OutputStream}.
+     * 
+     * @param out The stream to write to
+     * @param value The value to write
+     */
+    public static void writeUnsignedIntLE(OutputStream out, int value) throws IOException {
+        out.write(value >>> 8*0);
+        out.write(value >>> 8*1);
+        out.write(value >>> 8*2);
+        out.write(value >>> 8*3);
+    }
+
+    /**
+     * Write an unsigned integer in little-endian format to a byte array
+     * at a given offset.
+     * 
+     * @param buffer The byte array to write to
+     * @param offset The position in buffer to write to
+     * @param value The value to write
+     */
+    public static void writeUnsignedIntLE(byte[] buffer, int offset, int value) {
+        buffer[offset++] = (byte) (value >>> 8*0);
+        buffer[offset++] = (byte) (value >>> 8*1);
+        buffer[offset++] = (byte) (value >>> 8*2);
+        buffer[offset]   = (byte) (value >>> 8*3);
+    }
+
 
     /**
      * Get the absolute value of the given number. If the number is Int.MinValue return 0. This is different from
@@ -217,4 +281,36 @@ public class Utils {
         return h;
     }
 
+    /**
+     * Extracts the hostname from a "host:port" address string.
+     * @param address address string to parse
+     * @return hostname or null if the given address is incorrect
+     */
+    public static String getHost(String address) {
+        Matcher matcher = HOST_PORT_PATTERN.matcher(address);
+        return matcher.matches() ? matcher.group(1) : null;
+    }
+
+    /**
+     * Extracts the port number from a "host:port" address string.
+     * @param address address string to parse
+     * @return port number or null if the given address is incorrect
+     */
+    public static Integer getPort(String address) {
+        Matcher matcher = HOST_PORT_PATTERN.matcher(address);
+        return matcher.matches() ? Integer.parseInt(matcher.group(2)) : null;
+    }
+
+    /**
+     * Formats hostname and port number as a "host:port" address string,
+     * surrounding IPv6 addresses with braces '[', ']'
+     * @param host hostname
+     * @param port port number
+     * @return address string
+     */
+    public static String formatAddress(String host, Integer port) {
+        return host.contains(":")
+                ? "[" + host + "]:" + port // IPv6
+                : host + ":" + port;
+    }
 }

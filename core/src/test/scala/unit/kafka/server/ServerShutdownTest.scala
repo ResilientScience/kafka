@@ -106,9 +106,36 @@ class ServerShutdownTest extends JUnit3Suite with ZooKeeperTestHarness {
     val newProps = TestUtils.createBrokerConfig(0, port)
     newProps.setProperty("delete.topic.enable", "true")
     val newConfig = new KafkaConfig(newProps)
-    var server = new KafkaServer(newConfig)
+    val server = new KafkaServer(newConfig)
     server.startup()
     server.shutdown()
+    server.awaitShutdown()
+    Utils.rm(server.config.logDirs)
+    verifyNonDaemonThreadsStatus
+  }
+
+  @Test
+  def testCleanShutdownAfterFailedStartup() {
+    val newProps = TestUtils.createBrokerConfig(0, port)
+    newProps.setProperty("zookeeper.connect", "fakehostthatwontresolve:65535")
+    val newConfig = new KafkaConfig(newProps)
+    var server = new KafkaServer(newConfig)
+    try {
+      server.startup()
+      fail("Expected KafkaServer setup to fail, throw exception")
+    }
+    catch {
+      // Try to clean up carefully without hanging even if the test fails. This means trying to accurately
+      // identify the correct exception, making sure the server was shutdown, and cleaning up if anything
+      // goes wrong so that awaitShutdown doesn't hang
+      case e: org.I0Itec.zkclient.exception.ZkException =>
+        assertEquals(server.brokerState.currentState, NotRunning.state)
+        if (server.brokerState.currentState != NotRunning.state)
+          server.shutdown()
+      case e: Throwable =>
+        fail("Expected KafkaServer setup to fail with connection exception but caught a different exception.")
+        server.shutdown()
+    }
     server.awaitShutdown()
     Utils.rm(server.config.logDirs)
     verifyNonDaemonThreadsStatus

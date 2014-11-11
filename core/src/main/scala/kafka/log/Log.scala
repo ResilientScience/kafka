@@ -31,6 +31,21 @@ import scala.collection.JavaConversions
 
 import com.yammer.metrics.core.Gauge
 
+object LogAppendInfo {
+  val UnknownLogAppendInfo = LogAppendInfo(-1, -1, NoCompressionCodec, -1, -1, false)
+}
+
+/**
+ * Struct to hold various quantities we compute about each message set before appending to the log
+ * @param firstOffset The first offset in the message set
+ * @param lastOffset The last offset in the message set
+ * @param shallowCount The number of shallow messages
+ * @param validBytes The number of valid bytes
+ * @param codec The codec used in the message set
+ * @param offsetsMonotonic Are the offsets in this message set monotonically increasing
+ */
+case class LogAppendInfo(var firstOffset: Long, var lastOffset: Long, codec: CompressionCodec, shallowCount: Int, validBytes: Int, offsetsMonotonic: Boolean)
+
 
 /**
  * An append-only log for storing messages.
@@ -141,6 +156,7 @@ class Log(val dir: File,
                                      startOffset = start,
                                      indexIntervalBytes = config.indexInterval, 
                                      maxIndexSize = config.maxIndexSize,
+                                     rollJitterMs = config.randomSegmentJitter,
                                      time = time)
         if(!hasIndex) {
           error("Could not find index file corresponding to log file %s, rebuilding index...".format(segment.log.file.getAbsolutePath))
@@ -156,6 +172,7 @@ class Log(val dir: File,
                                      startOffset = 0,
                                      indexIntervalBytes = config.indexInterval, 
                                      maxIndexSize = config.maxIndexSize,
+                                     rollJitterMs = config.randomSegmentJitter,
                                      time = time))
     } else {
       recoverLog()
@@ -252,9 +269,6 @@ class Log(val dir: File,
       lock synchronized {
         appendInfo.firstOffset = nextOffsetMetadata.messageOffset
 
-        // maybe roll the log if this segment is full
-        val segment = maybeRoll()
-
         if(assignOffsets) {
           // assign offsets to the message set
           val offset = new AtomicLong(nextOffsetMetadata.messageOffset)
@@ -282,6 +296,16 @@ class Log(val dir: File,
           }
         }
 
+        // check messages set size may be exceed config.segmentSize
+        if(validMessages.sizeInBytes > config.segmentSize) {
+          throw new MessageSetSizeTooLargeException("Message set size is %d bytes which exceeds the maximum configured segment size of %d."
+            .format(validMessages.sizeInBytes, config.segmentSize))
+        }
+
+
+        // maybe roll the log if this segment is full
+        val segment = maybeRoll(validMessages.sizeInBytes)
+
         // now append to the log
         segment.append(appendInfo.firstOffset, validMessages)
 
@@ -301,17 +325,6 @@ class Log(val dir: File,
     }
   }
   
-  /**
-   * Struct to hold various quantities we compute about each message set before appending to the log
-   * @param firstOffset The first offset in the message set
-   * @param lastOffset The last offset in the message set
-   * @param shallowCount The number of shallow messages
-   * @param validBytes The number of valid bytes
-   * @param codec The codec used in the message set
-   * @param offsetsMonotonic Are the offsets in this message set monotonically increasing
-   */
-  case class LogAppendInfo(var firstOffset: Long, var lastOffset: Long, codec: CompressionCodec, shallowCount: Int, validBytes: Int, offsetsMonotonic: Boolean)
-
   /**
    * Validate the following:
    * <ol>
@@ -489,13 +502,21 @@ class Log(val dir: File,
   def logEndOffset: Long = nextOffsetMetadata.messageOffset
 
   /**
-   * Roll the log over to a new empty log segment if necessary
+   * Roll the log over to a new empty log segment if necessary.
+   *
+   * @param messagesSize The messages set size in bytes
+   * logSegment will be rolled if one of the following conditions met
+   * <ol>
+   * <li> The logSegment is full
+   * <li> The maxTime has elapsed
+   * <li> The index is full
+   * </ol>
    * @return The currently active segment after (perhaps) rolling to a new segment
    */
-  private def maybeRoll(): LogSegment = {
+  private def maybeRoll(messagesSize: Int): LogSegment = {
     val segment = activeSegment
-    if (segment.size > config.segmentSize || 
-        segment.size > 0 && time.milliseconds - segment.created > config.segmentMs ||
+    if (segment.size > config.segmentSize - messagesSize ||
+        segment.size > 0 && time.milliseconds - segment.created > config.segmentMs - segment.rollJitterMs ||
         segment.index.isFull) {
       debug("Rolling new log segment in %s (log_size = %d/%d, index_size = %d/%d, age_ms = %d/%d)."
             .format(name,
@@ -504,7 +525,7 @@ class Log(val dir: File,
                     segment.index.entries,
                     segment.index.maxEntries,
                     time.milliseconds - segment.created,
-                    config.segmentMs))
+                    config.segmentMs - segment.rollJitterMs))
       roll()
     } else {
       segment
@@ -535,6 +556,7 @@ class Log(val dir: File,
                                    startOffset = newOffset,
                                    indexIntervalBytes = config.indexInterval, 
                                    maxIndexSize = config.maxIndexSize,
+                                   rollJitterMs = config.randomSegmentJitter,
                                    time = time)
       val prev = addSegment(segment)
       if(prev != null)
@@ -627,6 +649,7 @@ class Log(val dir: File,
                                 newOffset,
                                 indexIntervalBytes = config.indexInterval, 
                                 maxIndexSize = config.maxIndexSize,
+                                rollJitterMs = config.randomSegmentJitter,
                                 time = time))
       updateLogEndOffset(newOffset)
       this.recoveryPoint = math.min(newOffset, this.recoveryPoint)

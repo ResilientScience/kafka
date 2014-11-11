@@ -18,15 +18,13 @@
 package kafka.log
 
 import java.io._
-import java.util.ArrayList
 import java.util.concurrent.atomic._
 import junit.framework.Assert._
 import org.scalatest.junit.JUnitSuite
 import org.junit.{After, Before, Test}
 import kafka.message._
-import kafka.common.{MessageSizeTooLargeException, OffsetOutOfRangeException}
+import kafka.common.{MessageSizeTooLargeException, OffsetOutOfRangeException, MessageSetSizeTooLargeException}
 import kafka.utils._
-import scala.Some
 import kafka.server.KafkaConfig
 
 class LogTest extends JUnitSuite {
@@ -87,6 +85,32 @@ class LogTest extends JUnitSuite {
     time.sleep(log.config.segmentMs + 1)
     log.append(new ByteBufferMessageSet())
     assertEquals("Appending an empty message set should not roll log even if succient time has passed.", numSegments, log.numberOfSegments)
+  }
+
+  /**
+   * Test for jitter s for time based log roll. This test appends messages then changes the time
+   * using the mock clock to force the log to roll and checks the number of segments.
+   */
+  @Test
+  def testTimeBasedLogRollJitter() {
+    val set = TestUtils.singleMessageSet("test".getBytes())
+    val maxJitter = 20 * 60L
+
+    // create a log
+    val log = new Log(logDir,
+      logConfig.copy(segmentMs = 1 * 60 * 60L, segmentJitterMs = maxJitter),
+      recoveryPoint = 0L,
+      scheduler = time.scheduler,
+      time = time)
+    assertEquals("Log begins with a single empty segment.", 1, log.numberOfSegments)
+    log.append(set)
+
+    time.sleep(log.config.segmentMs - maxJitter)
+    log.append(set)
+    assertEquals("Log does not roll on this append because it occurs earlier than max jitter", 1, log.numberOfSegments);
+    time.sleep(maxJitter - log.activeSegment.rollJitterMs + 1)
+    log.append(set)
+    assertEquals("Log should roll after segmentMs adjusted by random jitter", 2, log.numberOfSegments)
   }
 
   /**
@@ -239,7 +263,7 @@ class LogTest extends JUnitSuite {
   @Test
   def testCompressedMessages() {
     /* this log should roll after every messageset */
-    val log = new Log(logDir, logConfig.copy(segmentSize = 10), recoveryPoint = 0L, time.scheduler, time = time)
+    val log = new Log(logDir, logConfig.copy(segmentSize = 100), recoveryPoint = 0L, time.scheduler, time = time)
     
     /* append 2 compressed message sets, each with two messages giving offsets 0, 1, 2, 3 */
     log.append(new ByteBufferMessageSet(DefaultCompressionCodec, new Message("hello".getBytes), new Message("there".getBytes)))
@@ -286,7 +310,26 @@ class LogTest extends JUnitSuite {
   }
 
   /**
-   * We have a max size limit on message appends, check that it is properly enforced by appending a message larger than the 
+   *  MessageSet size shouldn't exceed the config.segmentSize, check that it is properly enforced by
+   * appending a message set larger than the config.segmentSize setting and checking that an exception is thrown.
+   */
+  @Test
+  def testMessageSetSizeCheck() {
+    val messageSet = new ByteBufferMessageSet(NoCompressionCodec, new Message ("You".getBytes), new Message("bethe".getBytes))
+    // append messages to log
+    val configSegmentSize = messageSet.sizeInBytes - 1
+    val log = new Log(logDir, logConfig.copy(segmentSize = configSegmentSize), recoveryPoint = 0L, time.scheduler, time = time)
+
+    try {
+      log.append(messageSet)
+      fail("message set should throw MessageSetSizeTooLargeException.")
+    } catch {
+      case e: MessageSetSizeTooLargeException => // this is good
+    }
+  }
+
+  /**
+   * We have a max size limit on message appends, check that it is properly enforced by appending a message larger than the
    * setting and checking that an exception is thrown.
    */
   @Test
@@ -305,10 +348,9 @@ class LogTest extends JUnitSuite {
       log.append(second)
       fail("Second message set should throw MessageSizeTooLargeException.")
     } catch {
-        case e: MessageSizeTooLargeException => // this is good
+      case e: MessageSizeTooLargeException => // this is good
     }
   }
-  
   /**
    * Append a bunch of messages to a log and then re-open it both with and without recovery and check that the log re-initializes correctly.
    */
@@ -375,7 +417,7 @@ class LogTest extends JUnitSuite {
     val set = TestUtils.singleMessageSet("test".getBytes())
     val setSize = set.sizeInBytes
     val msgPerSeg = 10
-    val segmentSize = msgPerSeg * (setSize - 1) // each segment will be 10 messages
+    val segmentSize = msgPerSeg * setSize  // each segment will be 10 messages
 
     // create a log
     val log = new Log(logDir, logConfig.copy(segmentSize = segmentSize), recoveryPoint = 0L, scheduler = time.scheduler, time = time)
@@ -429,7 +471,7 @@ class LogTest extends JUnitSuite {
     val set = TestUtils.singleMessageSet("test".getBytes())
     val setSize = set.sizeInBytes
     val msgPerSeg = 10
-    val segmentSize = msgPerSeg * (setSize - 1) // each segment will be 10 messages
+    val segmentSize = msgPerSeg * setSize  // each segment will be 10 messages
     val config = logConfig.copy(segmentSize = segmentSize)
     val log = new Log(logDir, config, recoveryPoint = 0L, scheduler = time.scheduler, time = time)
     assertEquals("There should be exactly 1 segment.", 1, log.numberOfSegments)

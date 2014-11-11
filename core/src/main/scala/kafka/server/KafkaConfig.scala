@@ -57,7 +57,18 @@ class KafkaConfig private (val props: VerifiableProperties) extends ZKConfig(pro
        millisInHour * props.getIntInRange("log.roll.hours", 24*7, (1, Int.MaxValue))
     }
   }
-  
+
+  private def getLogRollTimeJitterMillis(): Long = {
+    val millisInHour = 60L * 60L * 1000L
+
+    if(props.containsKey("log.roll.jitter.ms")) {
+      props.getIntInRange("log.roll.jitter.ms", (0, Int.MaxValue))
+    }
+    else {
+      millisInHour * props.getIntInRange("log.roll.jitter.hours", 0, (0, Int.MaxValue))
+    }
+  }
+
   /*********** General Configuration ***********/
 
   /* the broker id for this server */
@@ -113,6 +124,9 @@ class KafkaConfig private (val props: VerifiableProperties) extends ZKConfig(pro
   /* per-ip or hostname overrides to the default maximum number of connections */
   val maxConnectionsPerIpOverrides = props.getMap("max.connections.per.ip.overrides").map(entry => (entry._1, entry._2.toInt))
 
+  /* idle connections timeout: the server socket processor threads close the connections that idle more than this */
+  val connectionsMaxIdleMs = props.getLong("connections.max.idle.ms", 10*60*1000L)
+
   /*********** Log Configuration ***********/
 
   /* the default number of log partitions per topic */
@@ -127,6 +141,9 @@ class KafkaConfig private (val props: VerifiableProperties) extends ZKConfig(pro
 
   /* the maximum time before a new log segment is rolled out */
   val logRollTimeMillis = getLogRollTimeMillis
+
+  /* the maximum jitter to subtract from logRollTimeMillis */
+  val logRollTimeJitterMillis = getLogRollTimeJitterMillis
 
   /* the number of hours to keep a log file before deleting it */
   val logRetentionTimeMillis = getLogRetentionTimeMillis
@@ -196,13 +213,18 @@ class KafkaConfig private (val props: VerifiableProperties) extends ZKConfig(pro
   /* enable auto creation of topic on the server */
   val autoCreateTopicsEnable = props.getBoolean("auto.create.topics.enable", true)
 
+  /* define the minimum number of replicas in ISR needed to satisfy a produce request with required.acks=-1 (or all) */
+  val minInSyncReplicas = props.getIntInRange("min.insync.replicas",1,(1,Int.MaxValue))
+
+
+
   /*********** Replication configuration ***********/
 
   /* the socket timeout for controller-to-broker channels */
   val controllerSocketTimeoutMs = props.getInt("controller.socket.timeout.ms", 30000)
 
   /* the buffer size for controller-to-broker-channels */
-  val controllerMessageQueueSize= props.getInt("controller.message.queue.size", 10)
+  val controllerMessageQueueSize= props.getInt("controller.message.queue.size", Int.MaxValue)
 
   /* default replication factors for automatically created topics */
   val defaultReplicationFactor = props.getInt("default.replication.factor", 1)
@@ -213,8 +235,10 @@ class KafkaConfig private (val props: VerifiableProperties) extends ZKConfig(pro
   /* If the lag in messages between a leader and a follower exceeds this number, the leader will remove the follower from isr */
   val replicaLagMaxMessages = props.getLong("replica.lag.max.messages", 4000)
 
-  /* the socket timeout for network requests */
+  /* the socket timeout for network requests. Its value should be at least replica.fetch.wait.max.ms. */
   val replicaSocketTimeoutMs = props.getInt("replica.socket.timeout.ms", ConsumerConfig.SocketTimeout)
+  require(replicaFetchWaitMaxMs <= replicaSocketTimeoutMs, "replica.socket.timeout.ms should always be at least replica.fetch.wait.max.ms" +
+    " to prevent unnecessary socket timeouts")
 
   /* the socket receive buffer for network requests */
   val replicaSocketReceiveBufferBytes = props.getInt("replica.socket.receive.buffer.bytes", ConsumerConfig.SocketBufferSize)
@@ -246,7 +270,7 @@ class KafkaConfig private (val props: VerifiableProperties) extends ZKConfig(pro
 
   /* Enables auto leader balancing. A background thread checks and triggers leader
    * balance if required at regular intervals */
-  val autoLeaderRebalanceEnable = props.getBoolean("auto.leader.rebalance.enable", false)
+  val autoLeaderRebalanceEnable = props.getBoolean("auto.leader.rebalance.enable", true)
 
   /* the ratio of leader imbalance allowed per broker. The controller would trigger a leader balance if it goes above
    * this value per broker. The value is specified in percentage. */

@@ -395,21 +395,13 @@ object Utils extends Logging {
   }
 
   /**
-   * Parse a host and port out of a string
-   */
-  def parseHostPort(hostport: String) : (String, Int) = {
-    val splits = hostport.split(":")
-    (splits(0), splits(1).toInt)
-  }
-
-  /**
    * Get the stack trace from an exception as a string
    */
   def stackTrace(e: Throwable): String = {
-    val sw = new StringWriter;
-    val pw = new PrintWriter(sw);
-    e.printStackTrace(pw);
-    sw.toString();
+    val sw = new StringWriter
+    val pw = new PrintWriter(sw)
+    e.printStackTrace(pw)
+    sw.toString()
   }
 
   /**
@@ -573,5 +565,15 @@ object Utils extends Logging {
       case c if ((c >= '\u0000' && c <= '\u001f') || (c >= '\u007f' && c <= '\u009f')) => "\\u%04x".format(c: Int)
       case c => c
     }.mkString 
+  }
+
+  /**
+   * Returns a list of duplicated items
+   */
+  def duplicates[T](s: Traversable[T]): Iterable[T] = {
+    s.groupBy(identity)
+      .map{ case (k,l) => (k,l.size)}
+      .filter{ case (k,l) => (l > 1) }
+      .keys
   }
 }

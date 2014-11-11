@@ -230,7 +230,33 @@ class Partition(val topic: String,
     }
   }
 
-  def updateLeaderHWAndMaybeExpandIsr(replicaId: Int) {
+  /**
+   * Update the log end offset of a certain replica of this partition
+   */
+  def updateReplicaLEO(replicaId: Int, offset: LogOffsetMetadata) = {
+    getReplica(replicaId) match {
+      case Some(replica) =>
+        replica.logEndOffset = offset
+
+        // check if we need to expand ISR to include this replica
+        // if it is not in the ISR yet
+        maybeExpandIsr(replicaId)
+
+        debug("Recorded replica %d log end offset (LEO) position %d for partition %s."
+          .format(replicaId, offset.messageOffset, TopicAndPartition(topic, partitionId)))
+      case None =>
+        throw new NotAssignedReplicaException(("Leader %d failed to record follower %d's position %d since the replica" +
+          " is not recognized to be one of the assigned replicas %s for partition [%s,%d]").format(localBrokerId, replicaId,
+          offset.messageOffset, assignedReplicas().map(_.brokerId).mkString(","), topic, partitionId))
+    }
+  }
+
+  /**
+   * Check and maybe expand the ISR of the partition.
+   *
+   * This function can be triggered when a replica's LEO has incremented
+   */
+  def maybeExpandIsr(replicaId: Int) {
     inWriteLock(leaderIsrUpdateLock) {
       // check if this replica needs to be added to the ISR
       leaderReplicaIfLocal() match {
@@ -252,7 +278,10 @@ class Partition(val topic: String,
             updateIsr(newInSyncReplicas)
             replicaManager.isrExpandRate.mark()
           }
+          // check if the HW of the partition can now be incremented
+          // since the replica maybe now be in the ISR and its LEO has just incremented
           maybeIncrementLeaderHW(leaderReplica)
+
         case None => // nothing to do if no longer leader
       }
     }
@@ -269,14 +298,27 @@ class Partition(val topic: String,
           else
             true /* also count the local (leader) replica */
         })
+        val minIsr = leaderReplica.log.get.config.minInSyncReplicas
+
         trace("%d/%d acks satisfied for %s-%d".format(numAcks, requiredAcks, topic, partitionId))
-        if ((requiredAcks < 0 && leaderReplica.highWatermark.messageOffset >= requiredOffset) ||
-          (requiredAcks > 0 && numAcks >= requiredAcks)) {
+
+        if (requiredAcks < 0 && leaderReplica.highWatermark.messageOffset >= requiredOffset ) {
           /*
           * requiredAcks < 0 means acknowledge after all replicas in ISR
           * are fully caught up to the (local) leader's offset
           * corresponding to this produce request.
+          *
+          * minIsr means that the topic is configured not to accept messages
+          * if there are not enough replicas in ISR
+          * in this scenario the request was already appended locally and
+          * then added to the purgatory before the ISR was shrunk
           */
+          if (minIsr <= curInSyncReplicas.size) {
+            (true, ErrorMapping.NoError)
+          } else {
+            (true, ErrorMapping.NotEnoughReplicasAfterAppendCode)
+          }
+        } else if (requiredAcks > 0 && numAcks >= requiredAcks) {
           (true, ErrorMapping.NoError)
         } else
           (false, ErrorMapping.NoError)
@@ -286,8 +328,14 @@ class Partition(val topic: String,
   }
 
   /**
-   * There is no need to acquire the leaderIsrUpdate lock here since all callers of this private API acquire that lock
-   * @param leaderReplica
+   * Check and maybe increment the high watermark of the partition;
+   * this function can be triggered when
+   *
+   * 1. Partition ISR changed
+   * 2. Any replica's LEO changed
+   *
+   * Note There is no need to acquire the leaderIsrUpdate lock here
+   * since all callers of this private API acquire that lock
    */
   private def maybeIncrementLeaderHW(leaderReplica: Replica) {
     val allLogEndOffsets = inSyncReplicas.map(_.logEndOffset)
@@ -298,8 +346,8 @@ class Partition(val topic: String,
       debug("High watermark for partition [%s,%d] updated to %s".format(topic, partitionId, newHighWatermark))
       // some delayed requests may be unblocked after HW changed
       val requestKey = new TopicPartitionRequestKey(this.topic, this.partitionId)
-      replicaManager.unblockDelayedFetchRequests(requestKey)
-      replicaManager.unblockDelayedProduceRequests(requestKey)
+      replicaManager.tryCompleteDelayedFetch(requestKey)
+      replicaManager.tryCompleteDelayedProduce(requestKey)
     } else {
       debug("Skipping update high watermark since Old hw %s is larger than new hw %s for partition [%s,%d]. All leo's are %s"
         .format(oldHighWatermark, newHighWatermark, topic, partitionId, allLogEndOffsets.mkString(",")))
@@ -350,15 +398,24 @@ class Partition(val topic: String,
     stuckReplicas ++ slowReplicas
   }
 
-  def appendMessagesToLeader(messages: ByteBufferMessageSet) = {
+  def appendMessagesToLeader(messages: ByteBufferMessageSet, requiredAcks: Int = 0) = {
     inReadLock(leaderIsrUpdateLock) {
       val leaderReplicaOpt = leaderReplicaIfLocal()
       leaderReplicaOpt match {
         case Some(leaderReplica) =>
           val log = leaderReplica.log.get
+          val minIsr = log.config.minInSyncReplicas
+          val inSyncSize = inSyncReplicas.size
+
+          // Avoid writing to leader if there are not enough insync replicas to make it safe
+          if (inSyncSize < minIsr && requiredAcks == -1) {
+            throw new NotEnoughReplicasException("Number of insync replicas for partition [%s,%d] is [%d], below required minimum [%d]"
+              .format(topic,partitionId,minIsr,inSyncSize))
+          }
+
           val info = log.append(messages, assignOffsets = true)
           // probably unblock some follower fetch requests since log end offset has been updated
-          replicaManager.unblockDelayedFetchRequests(new TopicPartitionRequestKey(this.topic, this.partitionId))
+          replicaManager.tryCompleteDelayedFetch(new TopicPartitionRequestKey(this.topic, this.partitionId))
           // we may need to increment high watermark since ISR could be down to 1
           maybeIncrementLeaderHW(leaderReplica)
           info

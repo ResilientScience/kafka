@@ -25,6 +25,8 @@ import kafka.message.{MessageSet, ByteBufferMessageSet}
 import kafka.network.{MultiSend, Send}
 import kafka.api.ApiUtils._
 
+import scala.collection._
+
 object FetchResponsePartitionData {
   def readFrom(buffer: ByteBuffer): FetchResponsePartitionData = {
     val error = buffer.getShort
@@ -150,9 +152,8 @@ object FetchResponse {
   }
 }
 
-
-case class FetchResponse(correlationId: Int,
-                         data: Map[TopicAndPartition, FetchResponsePartitionData]) {
+case class FetchResponse(correlationId: Int, data: Map[TopicAndPartition, FetchResponsePartitionData])
+  extends RequestOrResponse() {
 
   /**
    * Partitions the data into a map of maps (one for each topic).
@@ -167,6 +168,16 @@ case class FetchResponse(correlationId: Int,
       })
       folded + topicData.sizeInBytes
     })
+
+  /*
+   * FetchResponse uses [sendfile](http://man7.org/linux/man-pages/man2/sendfile.2.html)
+   * api for data transfer through the FetchResponseSend, so `writeTo` aren't actually being used.
+   * It is implemented as an empty function to conform to `RequestOrResponse.writeTo`
+   * abstract method signature.
+   */
+  def writeTo(buffer: ByteBuffer): Unit = throw new UnsupportedOperationException
+
+  override def describe(details: Boolean): String = toString
 
   private def partitionDataFor(topic: String, partition: Int): FetchResponsePartitionData = {
     val topicAndPartition = TopicAndPartition(topic, partition)
